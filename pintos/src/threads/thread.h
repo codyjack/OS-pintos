@@ -4,6 +4,9 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+/* ##> Our implementation */
+#include "threads/synch.h"
+/* <## */
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -18,12 +21,27 @@ enum thread_status
    You can redefine this to whatever type you like. */
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
+/* ##> Our implementation */
+typedef int a, b;
+#define BIGGER(a, b)  ((a) > (b) ? (a): (b))
+/* <## */
 
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
-
+/* ##> Our implementation */
+/* A fake priority, used in priority_lock */
+#define PRIORITY_FAKE -1
+/* Lock deep level */
+#define LOCK_LEVEL 8
+/* Nice value boundary */
+#define NICE_MIN -20
+#define NICE_DEFAULT 0
+#define NICE_MAX 20
+/* recent_cpu in the begining */
+#define RECENT_CPU_BEGIN 0
+/* <## */
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -100,6 +118,27 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+
+    /* ##> our implementation*/
+    int64_t sleep_ticks;                 /* For alarm-clock */
+    /* Keep track of a thread's priority before a donation */
+    int priority_original;
+    /* For multiple donation */
+    /* the list of locks that a thread has.
+     * i.e.: Main (M) thread with priority (P) 31, thread A has P 32,
+     * B has P 33. At the beginning, M is the lock owner. A does lock_acquire,
+     * then M->locks includes A, B does lock_acquire, M->locks includes both
+     * A and B. After B does lock_release, M->locks only have A left.
+     */
+    /* If a thread's priority is donated */
+    bool is_donated;
+    struct list locks;                    /* All locks a thread holds */
+    struct lock *lock_blocked_by;         /* Thread blocked by lock */
+    /* For advanced schedule */
+    int nice;                             /* Thread nice value */
+    int recent_cpu;                       /* Thread recent CPU */
+    /* <##*/
+
   };
 
 /* If false (default), use round-robin scheduler.
@@ -119,12 +158,23 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 void thread_block (void);
 void thread_unblock (struct thread *);
 
+/*##> Our implementation */
+/*put current thread to sleep, that is, put it into sleep queue*/
+void thread_sleep(int64_t ticks);
+/*called every tick, check to see if there are threads need to be
+  waken up, if so, wake up it*/
+void thread_wakeup(void);
+/*<##*/
+
 struct thread *thread_current (void);
 tid_t thread_tid (void);
 const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
+/* ##> Our implementaion */
+void thread_yield_current (struct thread *);
+/* <## */
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
@@ -132,7 +182,17 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
-
+void thread_given_set_priority (struct thread *, int, bool);
+/* ##> Our implementaion */
+void thread_donate_priority (struct thread *, int);
+void thread_calculate_advanced_priority (void);
+void calculate_advanced_priority_for_all (void);
+void calculate_advanced_priority (struct thread *, void *aux);
+void thread_calculate_recent_cpu (void);
+void calculate_recent_cpu_for_all (void);
+void calculate_recent_cpu (struct thread *, void *aux);
+void calculate_load_avg (void);
+/* <## */
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);

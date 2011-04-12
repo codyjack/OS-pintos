@@ -7,7 +7,10 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
-  
+/* ##> Our implementation */
+#include "threads/fixed-point.h"
+#include <string.h>
+
 /* See [8254] for hardware details of the 8254 timer chip. */
 
 #if TIMER_FREQ < 19
@@ -92,8 +95,14 @@ timer_sleep (int64_t ticks)
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  /* while (timer_elapsed (start) < ticks)
+     thread_yield ();
+  */
+  
+  /* ##> Our implementation
+   * Put current thread to sleep for a fixed ticks */
+  thread_sleep(ticks);
+  /* <##*/
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +181,39 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+
+  /* ##> Our implementation */
+  /* Each time a timer interrupt occurs, recent_cpu is incremented by 1 for
+   * the running thread only, unless the idle thread is running.
+   *
+   * Assumptions made by some of the tests require that these recalculations of
+   * recent_cpu be made exactly when the system tick counter reaches a multiple
+   * of a second, that is, when timer_ticks () % TIMER_FREQ == 0, and not at
+   * any other time.
+   *
+   * Because of assumptions made by some of the tests, load_avg must be updated
+   * exactly when the system tick counter reaches a multiple of a second, that
+   * is, when timer_ticks () % TIMER_FREQ == 0, and not at any other time.
+   */
+  if (thread_mlfqs)
+    {
+      struct thread *cur;
+      cur = thread_current ();
+      if (cur->status == THREAD_RUNNING)
+        {
+          cur->recent_cpu = ADD_INT (cur->recent_cpu, 1);
+        }
+      if (ticks % TIMER_FREQ == 0)
+        {
+          calculate_load_avg ();
+          /* recent_cpu depends on load_avg */
+          calculate_recent_cpu_for_all ();
+        }
+      if (ticks % 4 == 0)
+        {
+          calculate_advanced_priority_for_all ();
+        }
+    }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
