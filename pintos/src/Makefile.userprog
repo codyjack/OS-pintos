@@ -3,7 +3,7 @@
 $(PROGS): CPPFLAGS += -I$(SRCDIR)/lib/user -I.
 
 # Linker flags.
-$(PROGS): LDFLAGS += -nostdlib -static -Wl,-T,$(LDSCRIPT)
+$(PROGS): LDFLAGS += -nostdlib -static -Wl,--build-id=none,-T,$(LDSCRIPT)
 $(PROGS): LDSCRIPT = $(SRCDIR)/lib/user/user.lds
 
 # Library code shared between kernel and user programs.

@@ -4,9 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-/* ##> Our implementation */
 #include "threads/synch.h"
-/* <## */
+#include "filesys/file.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -21,16 +20,14 @@ enum thread_status
    You can redefine this to whatever type you like. */
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
-/* ##> Our implementation */
+
 typedef int a, b;
 #define BIGGER(a, b)  ((a) > (b) ? (a): (b))
-/* <## */
 
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
-/* ##> Our implementation */
 /* A fake priority, used in priority_lock */
 #define PRIORITY_FAKE -1
 /* Lock deep level */
@@ -41,7 +38,29 @@ typedef int a, b;
 #define NICE_MAX 20
 /* recent_cpu in the begining */
 #define RECENT_CPU_BEGIN 0
-/* <## */
+
+struct child_status {
+  tid_t child_id;
+  bool is_exit_called;
+  bool has_been_waited;
+  int child_exit_status;
+  struct list_elem elem_child_status;  
+};
+
+
+/* A struct to keep track of a thread's children's information,
+ * inclduing exit status, if it is terminated by kernel, and
+ * if process_wait has been called successfully
+ */
+struct waiting_child
+  {
+    tid_t child_id;                          // thread_id
+    int child_exit_status;
+    bool is_terminated_by_kernel;
+    bool has_been_waited;
+    struct list_elem elem_waiting_child;     // itself
+  };
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -114,6 +133,24 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    tid_t parent_id;                    /* parent thread id */
+ 
+    /* signal to indicate the child's executable-loading status:
+     *  - 0: has not been loaded
+     *  - -1: load failed
+     *  - 1: load success*/
+    int child_load_status;
+    
+    /* monitor used to wait the child, owned by wait-syscall and waiting
+       for child to load executable */
+    struct lock lock_child;
+    struct condition cond_child;
+ 
+    /* list of children, which should be a list of struct child_status */
+    struct list children;
+
+    /* file struct represents the execuatable of the current thread */ 
+    struct file *exec_file;
 #endif
 
     /* Owned by thread.c. */
@@ -192,6 +229,8 @@ void thread_calculate_recent_cpu (void);
 void calculate_recent_cpu_for_all (void);
 void calculate_recent_cpu (struct thread *, void *aux);
 void calculate_load_avg (void);
+/* get a thread by it's id */
+struct thread * thread_get_by_id (tid_t);
 /* <## */
 int thread_get_nice (void);
 void thread_set_nice (int);
