@@ -1,7 +1,16 @@
-This is a course project taught at Northeastern University OS class (CS5600). 
-The contributors to this project are Wu Jiang and Guanghao Ding.
-----------------------------------------------------------------------------------------------
+HISTORY
+-------
+This was a course project taught at Northeastern University OS class (CS5600)
+during Sep. 18 2011 to Nov. 30 2011.
 
+CONTRIBUTORS
+------------
+Wu Jiang and Guanghao Ding.
+
+RESOURCE
+--------
 Pintos source: http://www.stanford.edu/class/cs140/projects/pintos/pintos.html
 
+FORMAT
+------
 Documents: PROJECT[1|2|3|4]-DESIGNDOC
