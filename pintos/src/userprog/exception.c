@@ -5,6 +5,8 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/pagedir.h"
+#include "vm/page.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -129,6 +131,8 @@ page_fault (struct intr_frame *f)
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
+  struct suppl_pte *spte;
+  struct thread *cur = thread_current ();
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
@@ -151,17 +155,34 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  if (!is_valid_ptr (fault_addr))
+  /* if the page fault it caused by a write violation, exit the process*/
+  if (!not_present)
     exit (-1);
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f);
+  
+  if (fault_addr == NULL || !not_present || !is_user_vaddr(fault_addr))
+    exit (-1);
+  
+  spte = get_suppl_pte (&cur->suppl_page_table, pg_round_down(fault_addr));
+  if (spte != NULL && !spte->is_loaded)
+    load_page (spte);
+  else if (spte == NULL && fault_addr >= (f->esp - 32) && 
+	   (PHYS_BASE - pg_round_down (fault_addr)) <= STACK_SIZE)
+    grow_stack (fault_addr);
+  else
+    {
+      if (!pagedir_get_page (cur->pagedir, fault_addr))
+	exit (-1);
+      
+      /* To implement virtual memory, delete the rest of the function
+	 body, and replace it with code that brings in the page to
+	 which fault_addr refers. */
+      printf ("Page fault at %p: %s error %s page in %s context.\n",
+	      fault_addr,
+	      not_present ? "not present" : "rights violation",
+	      write ? "writing" : "reading",
+	      user ? "user" : "kernel");
+      kill (f);
+    }
 }
 
 /* This function is exactly the same as the exit system call inside

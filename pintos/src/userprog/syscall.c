@@ -2,16 +2,14 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
-#include "threads/thread.h"
-#include "userprog/process.h"
 #include "threads/vaddr.h"
 #include "userprog/pagedir.h"
-/* for shutdown_power_off */
 #include "devices/shutdown.h"
 #include "filesys/filesys.h"
 #include "threads/malloc.h"
 #include "filesys/file.h"
 #include "devices/input.h"
+#include "vm/page.h"
 
 struct file_descriptor
 {
@@ -25,9 +23,7 @@ struct file_descriptor
    through syscalls. */
 struct list open_files; 
 
-/* the lock used by syscalls involving file system to ensure only one thread
-   at a time is accessing file system */
-struct lock fs_lock;
+static uint32_t *esp;
 
 static void syscall_handler (struct intr_frame *);
 
@@ -45,13 +41,16 @@ static int write (int, const void *, unsigned);
 static void seek (int, unsigned);
 static unsigned tell (int);
 static void close (int);
+static mapid_t mmap (int, void *);
+static void munmap (mapid_t);
 /* End of system call functions */
 
+
+/* Helper functions*/
 static struct file_descriptor *get_open_file (int);
 static void close_open_file (int);
-bool is_valid_ptr (const void *);
+static bool is_valid_uvaddr (const void *);
 static int allocate_fd (void);
-void close_file_by_owner (tid_t);
 
 void
 syscall_init (void) 
@@ -64,7 +63,6 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f)
 {
-  uint32_t *esp;
   esp = f->esp;
 
   if (!is_valid_ptr (esp) || !is_valid_ptr (esp + 1) ||
@@ -116,6 +114,12 @@ syscall_handler (struct intr_frame *f)
         case SYS_CLOSE:
           close (*(esp + 1));
           break;
+	case SYS_MMAP:
+	  f->eax = mmap (*(esp + 1), (void *) *(esp + 2));
+	  break;
+	case SYS_MUNMAP:
+	  munmap (*(esp + 1));
+	  break;
         default:
           break;
         }
@@ -123,13 +127,10 @@ syscall_handler (struct intr_frame *f)
 }
 
 
-/* Terminates the current user program, returning status to the kernel.
- */
+/* Terminates the current user program, returning status to the kernel. */
 void
 exit (int status)
 {
-  /* later on, we need to determine if there is process waiting for it */
-  /* process_exit (); */
   struct child_status *child;
   struct thread *cur = thread_current ();
   printf ("%s: exit(%d)\n", cur->name, status);
@@ -166,6 +167,7 @@ exec (const char *cmd_line)
    */
   tid_t tid;
   struct thread *cur;
+
   /* check if the user pinter is valid */
   if (!is_valid_ptr (cmd_line))
     {
@@ -173,7 +175,6 @@ exec (const char *cmd_line)
     }
 
   cur = thread_current ();
-
   cur->child_load_status = 0;
   tid = process_execute (cmd_line);
   lock_acquire(&cur->lock_child);
@@ -261,20 +262,54 @@ int
 read (int fd, void *buffer, unsigned size)
 {
   struct file_descriptor *fd_struct;
-  int status = 0; 
+  int status = 0;
+  struct thread *t = thread_current ();
 
-  if (!is_valid_ptr (buffer) || !is_valid_ptr (buffer + size - 1))
-    exit (-1);
+  unsigned buffer_size = size;
+  void * buffer_tmp = buffer;
 
-  lock_acquire (&fs_lock); 
-  
-  if (fd == STDOUT_FILENO)
+  /* check the user memory pointing by buffer are valid */
+  while (buffer_tmp != NULL)
     {
-      lock_release (&fs_lock);
-      return -1;
+      if (!is_valid_uvaddr (buffer_tmp))
+	exit (-1);
+
+      if (pagedir_get_page (t->pagedir, buffer_tmp) == NULL)   
+	{ 
+	  struct suppl_pte *spte;
+	  spte = get_suppl_pte (&t->suppl_page_table, 
+				pg_round_down (buffer_tmp));
+	  if (spte != NULL && !spte->is_loaded)
+	    load_page (spte);
+          else if (spte == NULL && buffer_tmp >= (esp - 32))
+	    grow_stack (buffer_tmp);
+	  else
+	    exit (-1);
+	}
+      
+      /* Advance */
+      if (buffer_size == 0)
+	{
+	  /* terminate the checking loop */
+	  buffer_tmp = NULL;
+	}
+      else if (buffer_size > PGSIZE)
+	{
+	  buffer_tmp += PGSIZE;
+	  buffer_size -= PGSIZE;
+	}
+      else
+	{
+	  /* last loop */
+	  buffer_tmp = buffer + size - 1;
+	  buffer_size = 0;
+	}
     }
 
-  if (fd == STDIN_FILENO)
+  lock_acquire (&fs_lock);   
+  if (fd == STDOUT_FILENO)
+      status = -1;
+  else if (fd == STDIN_FILENO)
     {
       uint8_t c;
       unsigned counter = size;
@@ -286,14 +321,14 @@ read (int fd, void *buffer, unsigned size)
           counter--; 
         }
       *buf = 0;
-      lock_release (&fs_lock);
-      return (size - counter);
-    } 
-  
-  fd_struct = get_open_file (fd);
-  if (fd_struct != NULL)
-    status = file_read (fd_struct->file_struct, buffer, size);
-
+      status = size - counter;
+    }
+  else 
+    {
+      fd_struct = get_open_file (fd);
+      if (fd_struct != NULL)
+	status = file_read (fd_struct->file_struct, buffer, size);
+    }
   lock_release (&fs_lock);
   return status;
 }
@@ -304,28 +339,52 @@ write (int fd, const void *buffer, unsigned size)
   struct file_descriptor *fd_struct;  
   int status = 0;
 
-  if (!is_valid_ptr (buffer) || !is_valid_ptr (buffer + size - 1))
-    exit (-1);
+  unsigned buffer_size = size;
+  void *buffer_tmp = buffer;
+
+  /* check the user memory pointing by buffer are valid */
+  while (buffer_tmp != NULL)
+    {
+      if (!is_valid_ptr (buffer_tmp))
+	exit (-1);
+      
+      /* Advance */ 
+      if (buffer_size > PGSIZE)
+	{
+	  buffer_tmp += PGSIZE;
+	  buffer_size -= PGSIZE;
+	}
+      else if (buffer_size == 0)
+	{
+	  /* terminate the checking loop */
+	  buffer_tmp = NULL;
+	}
+      else
+	{
+	  /* last loop */
+	  buffer_tmp = buffer + size - 1;
+	  buffer_size = 0;
+	}
+    }
 
   lock_acquire (&fs_lock); 
-
   if (fd == STDIN_FILENO)
     {
-      lock_release(&fs_lock);
-      return -1;
+      status = -1;
     }
-
-  if (fd == STDOUT_FILENO)
+  else if (fd == STDOUT_FILENO)
     {
-      putbuf (buffer, size);
-      lock_release(&fs_lock);
-      return size;
+      putbuf (buffer, size);;
+      status = size;
     }
- 
-  fd_struct = get_open_file (fd);
-  if (fd_struct != NULL)
-    status = file_write (fd_struct->file_struct, buffer, size);
+  else 
+    {
+      fd_struct = get_open_file (fd);
+      if (fd_struct != NULL)
+	status = file_write (fd_struct->file_struct, buffer, size);
+    }
   lock_release (&fs_lock);
+
   return status;
 }
 
@@ -366,6 +425,66 @@ close (int fd)
   lock_release (&fs_lock);
   return ; 
 }
+
+mapid_t
+mmap (int fd, void *addr)
+{
+  struct file_descriptor *fd_struct;
+  int32_t len;
+  struct thread *t = thread_current ();
+  int offset;
+
+  /* Validating conditions to determine whether to reject the request */
+  if (addr == NULL || addr == 0x0 || (pg_ofs (addr) != 0))
+    return -1;
+
+  /* Bad fds*/
+  if(fd == 0 || fd == 1)
+    return -1;
+  fd_struct = get_open_file (fd);
+  if (fd_struct == NULL)
+    return -1;
+  
+  /* file length not equal to 0 */
+  len = file_length (fd_struct->file_struct);
+  if (len <= 0)
+    return -1;
+
+  /* iteratively check if there is enough space for the file starting
+   * from the uvaddr addr*/
+  offset = 0;
+  while (offset < len)
+    {
+      if (get_suppl_pte (&t->suppl_page_table, addr + offset))
+	return -1;
+      
+      if (pagedir_get_page (t->pagedir, addr + offset))
+	return -1;
+	  
+      offset += PGSIZE;
+    }
+
+  /* Add an entry in memory mapped files table, and add entries in
+     supplemental page table iteratively which is in mmfiles_insert's
+     semantic.
+     If success, it will return the mapid;
+     otherwise, return -1 */
+  lock_acquire (&fs_lock);
+  struct file* newfile = file_reopen(fd_struct->file_struct);
+  lock_release (&fs_lock);
+  return (newfile == NULL) ? -1 : mmfiles_insert (addr, newfile, len);
+}
+
+void
+munmap (mapid_t mapping)
+{
+  /* Remove the entry in memory mapped files table, and remove corresponding
+     entries in supplemental page table iteratively which is in 
+     mmfiles_remove()'s semantic. */
+  mmfiles_remove (mapping);
+}
+
+/* Helper functions */
 
 struct file_descriptor *
 get_open_file (int fd)
@@ -417,11 +536,17 @@ bool
 is_valid_ptr (const void *usr_ptr)
 {
   struct thread *cur = thread_current ();
-  if (usr_ptr != NULL && is_user_vaddr (usr_ptr))
+  if (is_valid_uvaddr (usr_ptr))
     {
       return (pagedir_get_page (cur->pagedir, usr_ptr)) != NULL;
     }
   return false;
+}
+
+static bool
+is_valid_uvaddr (const void *uvaddr)
+{
+  return (uvaddr != NULL && is_user_vaddr (uvaddr));
 }
 
 int
@@ -451,4 +576,3 @@ close_file_by_owner (tid_t tid)
       e = next;
     }
 }
-

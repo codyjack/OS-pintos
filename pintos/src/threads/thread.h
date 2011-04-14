@@ -6,6 +6,11 @@
 #include <stdint.h>
 #include "threads/synch.h"
 #include "filesys/file.h"
+#include "vm/page.h"
+#include "lib/kernel/hash.h"
+
+typedef int mapid_t;
+typedef int pid_t;
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -46,20 +51,6 @@ struct child_status {
   int child_exit_status;
   struct list_elem elem_child_status;  
 };
-
-
-/* A struct to keep track of a thread's children's information,
- * inclduing exit status, if it is terminated by kernel, and
- * if process_wait has been called successfully
- */
-struct waiting_child
-  {
-    tid_t child_id;                          // thread_id
-    int child_exit_status;
-    bool is_terminated_by_kernel;
-    bool has_been_waited;
-    struct list_elem elem_waiting_child;     // itself
-  };
 
 /* A kernel thread or user process.
 
@@ -147,16 +138,22 @@ struct thread
     struct condition cond_child;
  
     /* list of children, which should be a list of struct child_status */
-    struct list children;
+    struct list children; 
 
     /* file struct represents the execuatable of the current thread */ 
     struct file *exec_file;
+
+    /* supplemental page table, which stores as hash table */
+    struct hash suppl_page_table;
+    
+    /* Memory Maped Files table */
+    mapid_t mapid_allocator;
+    struct hash mmfiles; 
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
 
-    /* ##> our implementation*/
     int64_t sleep_ticks;                 /* For alarm-clock */
     /* Keep track of a thread's priority before a donation */
     int priority_original;
@@ -174,8 +171,6 @@ struct thread
     /* For advanced schedule */
     int nice;                             /* Thread nice value */
     int recent_cpu;                       /* Thread recent CPU */
-    /* <##*/
-
   };
 
 /* If false (default), use round-robin scheduler.
@@ -195,13 +190,11 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 void thread_block (void);
 void thread_unblock (struct thread *);
 
-/*##> Our implementation */
 /*put current thread to sleep, that is, put it into sleep queue*/
 void thread_sleep(int64_t ticks);
 /*called every tick, check to see if there are threads need to be
   waken up, if so, wake up it*/
 void thread_wakeup(void);
-/*<##*/
 
 struct thread *thread_current (void);
 tid_t thread_tid (void);
@@ -209,9 +202,7 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
-/* ##> Our implementaion */
 void thread_yield_current (struct thread *);
-/* <## */
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
@@ -220,7 +211,6 @@ void thread_foreach (thread_action_func *, void *);
 int thread_get_priority (void);
 void thread_set_priority (int);
 void thread_given_set_priority (struct thread *, int, bool);
-/* ##> Our implementaion */
 void thread_donate_priority (struct thread *, int);
 void thread_calculate_advanced_priority (void);
 void calculate_advanced_priority_for_all (void);
@@ -231,7 +221,6 @@ void calculate_recent_cpu (struct thread *, void *aux);
 void calculate_load_avg (void);
 /* get a thread by it's id */
 struct thread * thread_get_by_id (tid_t);
-/* <## */
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);

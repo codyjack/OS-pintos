@@ -28,6 +28,8 @@
 #include "userprog/gdt.h"
 #include "userprog/syscall.h"
 #include "userprog/tss.h"
+#include "vm/frame.h"
+#include "vm/page.h"
 #else
 #include "tests/threads/tests.h"
 #endif
@@ -36,6 +38,9 @@
 #include "devices/ide.h"
 #include "filesys/filesys.h"
 #include "filesys/fsutil.h"
+#endif
+#ifdef VM
+#include "vm/swap.h"
 #endif
 
 /* Page directory with kernel mappings only. */
@@ -113,6 +118,8 @@ main (void)
 #ifdef USERPROG
   exception_init ();
   syscall_init ();
+  vm_frame_init ();
+  vm_page_init ();
 #endif
 
   /* Start thread scheduler and enable interrupts. */
@@ -125,6 +132,11 @@ main (void)
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
+#endif
+
+#ifdef VM
+  locate_block_devices ();
+  vm_swap_init ();
 #endif
 
   printf ("Boot complete.\n");
@@ -149,6 +161,7 @@ bss_init (void)
   extern char _start_bss, _end_bss;
   memset (&_start_bss, 0, &_end_bss - &_start_bss);
 }
+
 
 /* Populates the base page directory and page table with the
    kernel virtual mapping, and then sets up the CPU to use the
