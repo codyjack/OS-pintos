@@ -199,7 +199,8 @@ eligible page fault is what PUSHA may cause, which is 32 bytes lower than esp.
 >> textbook for an explanation of the necessary conditions for
 >> deadlock.)
 
-The frame table and swap table are global/system-wide, supplemental page table is per-process. 
+The frame table and swap table are global/system-wide, supplemental page
+table is per-process. 
 
 There is an internal lock for frame table and swap table, but supplemental page
 table will also might be used by other process during eviction, so to avoid
