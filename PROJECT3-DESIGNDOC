@@ -178,7 +178,10 @@ why they are not evict-able.
 >> process Q, how do you adjust the page table (and any other data
 >> structures) to reflect the frame Q no longer has?
 
-From frame table entry, as described above, when a frame of Q is chosen, we can know that it’s from Q and what the mapped user virtual address is. Then we will get the thread struct of Q and free the page from Q using pagedir_clear_page (). This will remove Q’s reference to the frame.
+From frame table entry, as described above, when a frame of Q is chosen,
+we can know that it’s from Q and what the mapped user virtual address is.
+Then we will get the thread struct of Q and free the page from Q using
+pagedir_clear_page (). This will remove Q’s reference to the frame.
 
 >> B4: Explain your heuristic for deciding whether a page fault for an
 >> invalid virtual address should cause the stack to be extended into
